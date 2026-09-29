@@ -1,0 +1,109 @@
+name: Order Service CI
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  # ============================================
+  # JOB 1: Kiểm tra chất lượng code (chạy song song)
+  # ============================================
+  code-quality:
+    name: Code Quality Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x ./gradlew
+
+      - name: Run code quality check
+        run: ./gradlew check
+
+  # ============================================
+  # JOB 2: Chạy Unit Test với PostgreSQL (chạy song song)
+  # ============================================
+  unit-test:
+    name: Unit Tests with PostgreSQL
+    runs-on: ubuntu-latest
+
+    # Service container: PostgreSQL tạm thời cho test
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: testuser
+          POSTGRES_PASSWORD: testpass
+          POSTGRES_DB: order_test
+        # Health check: đợi PostgreSQL sẵn sàng trước khi chạy test [citation:1][citation:12]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        # Map port 5432 của container ra host để job truy cập qua localhost [citation:12]
+        ports:
+          - 5432:5432
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x ./gradlew
+
+      - name: Run Unit Tests
+        run: ./gradlew test
+        env:
+          # Kết nối tới PostgreSQL service container qua localhost
+          # Job chạy trực tiếp trên runner (không trong container) nên dùng localhost [citation:12][citation:20]
+          SPRING_DATASOURCE_URL: jdbc:postgresql://localhost:5432/order_test
+          SPRING_DATASOURCE_USERNAME: testuser
+          SPRING_DATASOURCE_PASSWORD: testpass
+
+  # ============================================
+  # JOB 3: Build JAR (chỉ chạy khi CẢ HAI job trên thành công)
+  # ============================================
+  build:
+    name: Build JAR
+    # needs: [a, b] → job này đợi cả hai job thành công mới chạy [citation:14]
+    needs: [code-quality, unit-test]
+    runs-on: ubuntu-latest
+    steps:
+      # Job Isolation: runner mới hoàn toàn → phải checkout lại [Bài 3]
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Job Isolation: không kế thừa Java từ job trước → phải setup lại
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x ./gradlew
+
+      - name: Build JAR
+        run: ./gradlew bootJar
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: order-service-jar
+          path: build/libs/*.jar
+          retention-days: 7
